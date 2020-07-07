@@ -1258,12 +1258,34 @@ module Decode =
             if Helpers.isString value then
                 let name = Helpers.asString value
                 makeUnion extra caseStrategy t unionCasesInfo name [||]
+            #if THOTH_JSON_FABLE
             else if Helpers.isArray value then
                 let values = Helpers.asArray value
                 let name = Helpers.asString values.[0]
                 makeUnion extra caseStrategy t unionCasesInfo name values.[1..]
             else
                 ("", BadPrimitive("a string or an array", value)) |> Error
+            #else // Newtonsoft
+            else if Helpers.isObject value then
+                let valueObj = value.Value<JObject>()
+                let uciOption = unionCasesInfo
+                                |> Array.tryFind (fun uci -> valueObj.ContainsKey uci.Name)
+                match uciOption with
+                    | Some uci ->
+                        let content = valueObj.[uci.Name]
+                        if Helpers.isBoolean content
+                        then
+                            makeUnion extra caseStrategy uci.DeclaringType unionCasesInfo uci.Name [||]
+                        else if Helpers.isArray content
+                        then
+                            let contentArray = Helpers.asArray content
+                            makeUnion extra caseStrategy uci.DeclaringType unionCasesInfo uci.Name contentArray
+                        else
+                            makeUnion extra caseStrategy uci.DeclaringType unionCasesInfo uci.Name [| content |]
+                    | None -> ("", BadPrimitive("Type not found in Union Cases", value)) |> Error
+            else
+                ("", BadPrimitive("a string or an object", value)) |> Error
+            #endif
 
         oneOf [
             fun value ->

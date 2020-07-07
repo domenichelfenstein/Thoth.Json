@@ -569,7 +569,7 @@ Reason: Unknown value provided for the enum
             Expect.equal actual expected ""
 
         testCase "Auto.fromString works with unions with private constructors" <| fun _ ->
-            let json = """[ "Baz", ["Bar", "foo"]]"""
+            let json = """[{"Baz":true},{"Bar":"foo"}]"""
             let actual = Decode.Auto.fromString<UnionWithPrivateConstructor list>(json, caseStrategy=CamelCase)
             let expected = Ok [Baz; Bar "foo"]
             Expect.equal actual expected ""
@@ -630,18 +630,6 @@ Reason: Unknown value provided for the enum
             let actual = Decode.Auto.unsafeFromString json
             Expect.equal actual expected ""
 
-        testCase "Old style of single case unions is supported" <| fun _ ->
-            let expected = SingleCaseDUSimple "Maxime"
-            let json =
-                """
-[
-    "SingleCaseDUSimple",
-    "Maxime"
-]
-                """.Trim()
-            let actual = Decode.Auto.unsafeFromString(json)
-            Expect.equal actual expected ""
-
         testCase "Auto.unsafeFromString works with HTML inside of a string" <| fun _ ->
             let expected =
                 {
@@ -686,7 +674,7 @@ Reason: Unknown value provided for the enum
 
             Expect.equal actual 99 ""
 
-        testCase "Decode.Auto.fromString works with [<StrinEnum>]" <| fun _ ->
+        testCase "Decode.Auto.fromString works with [<StringEnum>]" <| fun _ ->
             let expected = Camera.FirstPerson
             let actual = Decode.Auto.unsafeFromString("\"firstPerson\"")
             Expect.equal actual expected ""
