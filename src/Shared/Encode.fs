@@ -693,6 +693,169 @@ module Encode =
             #endif
         )
 
+    and inline private handleMapOrDict (extra : Map<string, ref<BoxedEncoder>>)
+                                        (caseStrategy : CaseStrategy)
+                                        (skipNullField : bool)
+                                        (t : System.Type) : BoxedEncoder =
+        let keyType = t.GenericTypeArguments.[0]
+        let valueType = t.GenericTypeArguments.[1]
+        let valueEncoder =
+            valueType
+            |> autoEncoder extra caseStrategy skipNullField
+
+        match keyType with
+        | StringifiableType toString ->
+            boxEncoder(fun (value : obj) ->
+                #if THOTH_JSON_FABLE
+                let res = JsonValue()
+
+                // This cast to Map<string, obj> seems to be fine for Fable
+                // We use the same trick for non stringifiable key
+                for KeyValue(key, value) in value :?> Map<string, obj> do
+                    res.[toString key] <- valueEncoder.Encode value
+
+                res
+                #endif
+
+                #if THOTH_JSON_NEWTONSOFT
+                let res = JObject()
+                let kvProps = typedefof<KeyValuePair<obj, obj>>.MakeGenericType(keyType, valueType).GetProperties()
+
+                for kv in value :?> System.Collections.IEnumerable do
+                    let k = kvProps.[0].GetValue(kv)
+                    let v = kvProps.[1].GetValue(kv)
+                    res.[toString k] <- valueEncoder.Encode v
+
+                res :> JsonValue
+                #endif
+            )
+
+        | _ ->
+            boxEncoder(fun (value : obj) ->
+                let keyEncoder =
+                    keyType
+                    |> autoEncoder extra caseStrategy skipNullField
+
+                #if THOTH_JSON_FABLE
+                let res = ResizeArray<obj>()
+
+                for KeyValue(key, value) in value :?> Map<string, obj> do
+                    res.Add(ResizeArray<obj>([ keyEncoder.Encode key; valueEncoder.Encode value ]))
+
+                res :> JsonValue
+                #endif
+
+                #if THOTH_JSON_NEWTONSOFT
+                let res = JArray()
+                let kvProps = typedefof<KeyValuePair<obj, obj>>.MakeGenericType(keyType, valueType).GetProperties()
+
+                for kv in value :?> System.Collections.IEnumerable do
+                    let k = kvProps.[0].GetValue(kv)
+                    let v = kvProps.[1].GetValue(kv)
+
+                    #if THOTH_JSON_NEWTONSOFT
+                    res.Add(JArray [| keyEncoder.Encode k; valueEncoder.Encode v |])
+                    #endif
+
+                res :> JsonValue
+                #endif
+            )
+
+    and inline private handleUnionLikeLU (extra : Map<string, ref<BoxedEncoder>>)
+                            (caseStrategy : CaseStrategy)
+                            (skipNullField : bool)
+                            (t : System.Type) : BoxedEncoder =
+        boxEncoder(fun (value : obj) ->
+            #if THOTH_JSON_NEWTONSOFT
+            let unionCasesInfo = FSharpType.GetUnionCases(t, allowAccessToPrivateRepresentation = true)
+            let info, fields = FSharpValue.GetUnionFields(value, t, allowAccessToPrivateRepresentation = true)
+
+            let fieldTypes = info.GetFields()
+            let isTuple =
+                fieldTypes
+                |> Seq.forall (fun x -> x.Name.StartsWith "Item")
+
+            let isEnumDU =
+                unionCasesInfo
+                |> Seq.forall (fun x -> x.GetFields().Length = 0)
+
+            let getTypeName t =
+                match t with
+                // Replicate Fable behaviour when using StringEnum
+                | Util.StringEnum t ->
+                    match info with
+                    | Util.CompiledName name -> name
+                    | _ ->
+                        match t.ConstructorArguments with
+                        | Util.LowerFirst ->
+                            let name = info.Name.[..0].ToLowerInvariant() + info.Name.[1..]
+                            name
+                        | Util.Forward -> info.Name
+
+                | _ -> info.Name
+
+            if isEnumDU
+            then
+                getTypeName t |> string
+            else
+                match unionCasesInfo.Length with
+                | 1 ->
+                    // There is only one field so we can use a direct access to it
+                    let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
+                    let content = encoder.Encode(fields.[0])
+                    let wrapper = JObject()
+                    wrapper.Add(info.Name, content)
+                    wrapper :> JsonValue
+
+                | _ ->
+                    match fields.Length with
+                    | 0 ->
+                        let typeName =
+                            getTypeName t
+                        let result = JObject()
+                        result.Add(typeName, (bool true))
+                        result :> JsonValue
+
+                    | length ->
+                        let result =
+                            if isTuple
+                            then
+                                let fieldTypeInfos = info.GetFields()
+                                if fields.Length = 1
+                                then
+                                    // wert
+                                    let fieldInfo = fieldTypeInfos.[0]
+                                    let field = fields.[0]
+                                    let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
+                                    fieldEncoder.Encode field
+                                else
+                                    // array
+                                    let result = JArray()
+                                    for i in 0..(length-1) do
+                                        let fieldInfo = fieldTypeInfos.[i]
+                                        let field = fields.[i]
+                                        let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
+                                        let fieldValue = fieldEncoder.Encode field
+                                        result.Add(fieldValue)
+                                    result :> JsonValue
+                            else
+                                let result = JObject()
+                                let fieldTypeInfos = info.GetFields()
+                                for i in 0..(length-1) do
+                                    let fieldInfo = fieldTypeInfos.[i]
+                                    let field = fields.[i]
+                                    let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
+                                    let fieldValue = fieldEncoder.Encode field
+                                    result.Add(fieldInfo.Name, fieldValue)
+                                result :> JsonValue
+
+                        let wrapper = JObject()
+                        wrapper.Add(info.Name, result)
+                        wrapper :> JsonValue
+            #endif
+            string "error"
+        )
+
     and inline private handleUnion (extra : Map<string, ref<BoxedEncoder>>)
                             (caseStrategy : CaseStrategy)
                             (skipNullField : bool)
@@ -701,42 +864,88 @@ module Encode =
             let unionCasesInfo = FSharpType.GetUnionCases(t, allowAccessToPrivateRepresentation = true)
             let info, fields = FSharpValue.GetUnionFields(value, t, allowAccessToPrivateRepresentation = true)
 
-            match unionCasesInfo.Length with
-            | 1 ->
-                let fieldTypes = info.GetFields()
-                // There is only one field so we can use a direct access to it
-                let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
-                encoder.Encode(fields.[0])
+            let fieldTypes = info.GetFields()
+            let isTuple =
+                fieldTypes
+                |> Seq.forall (fun x -> x.Name.StartsWith "Item")
 
-            | _ ->
-                match fields.Length with
-                | 0 ->
-                    #if !NETFRAMEWORK && !THOTH_JSON_FABLE
-                    match t with
-                    // Replicate Fable behaviour when using StringEnum
-                    | Util.StringEnum t ->
-                        match info with
-                        | Util.CompiledName name -> string name
-                        | _ ->
-                            match t.ConstructorArguments with
-                            | Util.LowerFirst ->
-                                let name = info.Name.[..0].ToLowerInvariant() + info.Name.[1..]
-                                string name
-                            | Util.Forward -> string info.Name
+            let isEnumDU =
+                unionCasesInfo
+                |> Seq.forall (fun x -> x.GetFields().Length = 0)
 
-                    | _ -> string info.Name
-                    #else
-                    string info.Name
-                    #endif
+            let getTypeName t =
+                match t with
+                // Replicate Fable behaviour when using StringEnum
+                | Util.StringEnum t ->
+                    match info with
+                    | Util.CompiledName name -> name
+                    | _ ->
+                        match t.ConstructorArguments with
+                        | Util.LowerFirst ->
+                            let name = info.Name.[..0].ToLowerInvariant() + info.Name.[1..]
+                            name
+                        | Util.Forward -> info.Name
 
-                | length ->
-                    let fieldTypes = info.GetFields()
-                    let res = Array.zeroCreate(length + 1)
-                    res.[0] <- string info.Name
-                    for i = 1 to length do
-                        let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[i-1].PropertyType
-                        res.[i] <- encoder.Encode(fields.[i-1])
-                    array res
+                | _ -> info.Name
+
+            if isEnumDU
+            then
+                getTypeName t |> string
+            else
+                match unionCasesInfo.Length with
+                | 1 ->
+                    // There is only one field so we can use a direct access to it
+                    let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
+                    let content = encoder.Encode(fields.[0])
+                    let wrapper = JObject()
+                    wrapper.Add(info.Name, content)
+                    wrapper :> JsonValue
+
+                | _ ->
+                    match fields.Length with
+                    | 0 ->
+                        let typeName =
+                            getTypeName t
+                        let result = JObject()
+                        result.Add(typeName, (bool true))
+                        result :> JsonValue
+
+                    | length ->
+                        let result =
+                            if isTuple
+                            then
+                                let fieldTypeInfos = info.GetFields()
+                                if fields.Length = 1
+                                then
+                                    // wert
+                                    let fieldInfo = fieldTypeInfos.[0]
+                                    let field = fields.[0]
+                                    let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
+                                    fieldEncoder.Encode field
+                                else
+                                    // array
+                                    let result = JArray()
+                                    for i in 0..(length-1) do
+                                        let fieldInfo = fieldTypeInfos.[i]
+                                        let field = fields.[i]
+                                        let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
+                                        let fieldValue = fieldEncoder.Encode field
+                                        result.Add(fieldValue)
+                                    result :> JsonValue
+                            else
+                                let result = JObject()
+                                let fieldTypeInfos = info.GetFields()
+                                for i in 0..(length-1) do
+                                    let fieldInfo = fieldTypeInfos.[i]
+                                    let field = fields.[i]
+                                    let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
+                                    let fieldValue = fieldEncoder.Encode field
+                                    result.Add(fieldInfo.Name, fieldValue)
+                                result :> JsonValue
+
+                        let wrapper = JObject()
+                        wrapper.Add(info.Name, result)
+                        wrapper :> JsonValue
         )
 
     and inline private handleRecordAndUnion (extra : Map<string, ref<BoxedEncoder>>)
@@ -819,74 +1028,6 @@ If you can't use one of these types, please pass add a new extra coder.
             )
             |> seq
         )
-
-    and inline private handleMapOrDict (extra : Map<string, ref<BoxedEncoder>>)
-                                        (caseStrategy : CaseStrategy)
-                                        (skipNullField : bool)
-                                        (t : System.Type) : BoxedEncoder =
-        let keyType = t.GenericTypeArguments.[0]
-        let valueType = t.GenericTypeArguments.[1]
-        let valueEncoder =
-            valueType
-            |> autoEncoder extra caseStrategy skipNullField
-
-        match keyType with
-        | StringifiableType toString ->
-            boxEncoder(fun (value : obj) ->
-                #if THOTH_JSON_FABLE
-                let res = JsonValue()
-
-                // This cast to Map<string, obj> seems to be fine for Fable
-                // We use the same trick for non stringifiable key
-                for KeyValue(key, value) in value :?> Map<string, obj> do
-                    res.[toString key] <- valueEncoder.Encode value
-
-                res
-                #endif
-
-                #if THOTH_JSON_NEWTONSOFT
-                let res = JObject()
-                let kvProps = typedefof<KeyValuePair<obj, obj>>.MakeGenericType(keyType, valueType).GetProperties()
-
-                for kv in value :?> System.Collections.IEnumerable do
-                    let k = kvProps.[0].GetValue(kv)
-                    let v = kvProps.[1].GetValue(kv)
-                    res.[toString k] <- valueEncoder.Encode v
-
-                res :> JsonValue
-                #endif
-            )
-
-        | _ ->
-            boxEncoder(fun (value : obj) ->
-                let keyEncoder =
-                    keyType
-                    |> autoEncoder extra caseStrategy skipNullField
-
-                #if THOTH_JSON_FABLE
-                let res = ResizeArray<obj>()
-
-                for KeyValue(key, value) in value :?> Map<string, obj> do
-                    res.Add(ResizeArray<obj>([ keyEncoder.Encode key; valueEncoder.Encode value ]))
-
-                res :> JsonValue
-                #endif
-
-                #if THOTH_JSON_NEWTONSOFT
-                let res = JArray()
-                let kvProps = typedefof<KeyValuePair<obj, obj>>.MakeGenericType(keyType, valueType).GetProperties()
-
-                for kv in value :?> System.Collections.IEnumerable do
-                    let k = kvProps.[0].GetValue(kv)
-                    let v = kvProps.[1].GetValue(kv)
-
-                    #if THOTH_JSON_NEWTONSOFT
-                    res.Add(JArray [| keyEncoder.Encode k; valueEncoder.Encode v |])
-                    #endif
-
-                res :> JsonValue
-                #endif
-            )
 
     and inline private handleGeneric (extra : Map<string, ref<BoxedEncoder>>)
                                 (caseStrategy : CaseStrategy)

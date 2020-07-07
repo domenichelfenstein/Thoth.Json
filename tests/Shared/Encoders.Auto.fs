@@ -163,7 +163,7 @@ let tests =
                 Expect.equal actual expected ""
 
             testCase "Encode.Auto.toString works with unions with private constructors" <| fun _ ->
-                let expected = """["Baz",["Bar","foo"]]"""
+                let expected = """[{"Baz":true},{"Bar":"foo"}]"""
                 let x = [Baz; Bar "foo"]
                 let actual = Encode.Auto.toString(0, x, caseStrategy=CamelCase)
                 Expect.equal actual expected ""
@@ -322,18 +322,24 @@ let tests =
                 let actual = Encode.Auto.toString(4, SingleCaseDUComplex {| FirstName = "Maxime"; Age = 28 |})
                 Expect.equal actual expected ""
 
-            testCase "Union case with several case are encoding as array or string" <| fun _ ->
+            testCase "Union case with several case are encoding as object" <| fun _ ->
                 let circleExpected =
                     """
-[
-    "Circle",
-    10
-]
+{
+    "Circle": {
+        "radius": 10
+    }
+}
                     """.Trim()
                 let circleActual = Encode.Auto.toString(4, Shape.Circle 10)
                 Expect.equal circleActual circleExpected ""
 
-                let voidExpected = "\"Void\""
+                let voidExpected =
+                    """
+{
+    "Void": true
+}
+                    """.Trim()
                 let voidActual = Encode.Auto.toString(4, Shape.Void)
                 Expect.equal voidActual voidExpected ""
 

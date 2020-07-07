@@ -34,9 +34,9 @@ let quicktests =
 let main args =
     let allTests =
         testList "All" [
-            Decoders.Manual.tests
-            Decoders.Auto.tests
-            Encoders.Manual.tests
+//            Decoders.Manual.tests
+//            Decoders.Auto.tests
+//            Encoders.Manual.tests
             Encoders.Auto.tests
             // Uncomment this line if you want to use the quicktests useful
             // when prototyping or trying to reproduce an issue
