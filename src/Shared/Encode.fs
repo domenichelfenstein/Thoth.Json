@@ -761,101 +761,7 @@ module Encode =
                 #endif
             )
 
-    and inline private handleUnionLikeLU (extra : Map<string, ref<BoxedEncoder>>)
-                            (caseStrategy : CaseStrategy)
-                            (skipNullField : bool)
-                            (t : System.Type) : BoxedEncoder =
-        boxEncoder(fun (value : obj) ->
-            #if THOTH_JSON_NEWTONSOFT
-            let unionCasesInfo = FSharpType.GetUnionCases(t, allowAccessToPrivateRepresentation = true)
-            let info, fields = FSharpValue.GetUnionFields(value, t, allowAccessToPrivateRepresentation = true)
-
-            let fieldTypes = info.GetFields()
-            let isTuple =
-                fieldTypes
-                |> Seq.forall (fun x -> x.Name.StartsWith "Item")
-
-            let isEnumDU =
-                unionCasesInfo
-                |> Seq.forall (fun x -> x.GetFields().Length = 0)
-
-            let getTypeName t =
-                match t with
-                // Replicate Fable behaviour when using StringEnum
-                | Util.StringEnum t ->
-                    match info with
-                    | Util.CompiledName name -> name
-                    | _ ->
-                        match t.ConstructorArguments with
-                        | Util.LowerFirst ->
-                            let name = info.Name.[..0].ToLowerInvariant() + info.Name.[1..]
-                            name
-                        | Util.Forward -> info.Name
-
-                | _ -> info.Name
-
-            if isEnumDU
-            then
-                getTypeName t |> string
-            else
-                match unionCasesInfo.Length with
-                | 1 ->
-                    // There is only one field so we can use a direct access to it
-                    let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
-                    let content = encoder.Encode(fields.[0])
-                    let wrapper = JObject()
-                    wrapper.Add(info.Name, content)
-                    wrapper :> JsonValue
-
-                | _ ->
-                    match fields.Length with
-                    | 0 ->
-                        let typeName =
-                            getTypeName t
-                        let result = JObject()
-                        result.Add(typeName, (bool true))
-                        result :> JsonValue
-
-                    | length ->
-                        let result =
-                            if isTuple
-                            then
-                                let fieldTypeInfos = info.GetFields()
-                                if fields.Length = 1
-                                then
-                                    // wert
-                                    let fieldInfo = fieldTypeInfos.[0]
-                                    let field = fields.[0]
-                                    let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
-                                    fieldEncoder.Encode field
-                                else
-                                    // array
-                                    let result = JArray()
-                                    for i in 0..(length-1) do
-                                        let fieldInfo = fieldTypeInfos.[i]
-                                        let field = fields.[i]
-                                        let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
-                                        let fieldValue = fieldEncoder.Encode field
-                                        result.Add(fieldValue)
-                                    result :> JsonValue
-                            else
-                                let result = JObject()
-                                let fieldTypeInfos = info.GetFields()
-                                for i in 0..(length-1) do
-                                    let fieldInfo = fieldTypeInfos.[i]
-                                    let field = fields.[i]
-                                    let fieldEncoder = autoEncoder extra caseStrategy skipNullField fieldInfo.PropertyType
-                                    let fieldValue = fieldEncoder.Encode field
-                                    result.Add(fieldInfo.Name, fieldValue)
-                                result :> JsonValue
-
-                        let wrapper = JObject()
-                        wrapper.Add(info.Name, result)
-                        wrapper :> JsonValue
-            #endif
-            string "error"
-        )
-
+#if THOTH_JSON_NEWTONSOFT
     and inline private handleUnion (extra : Map<string, ref<BoxedEncoder>>)
                             (caseStrategy : CaseStrategy)
                             (skipNullField : bool)
@@ -896,10 +802,7 @@ module Encode =
                 | 1 ->
                     // There is only one field so we can use a direct access to it
                     let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
-                    let content = encoder.Encode(fields.[0])
-                    let wrapper = JObject()
-                    wrapper.Add(info.Name, content)
-                    wrapper :> JsonValue
+                    encoder.Encode(fields.[0])
 
                 | _ ->
                     match fields.Length with
@@ -947,6 +850,39 @@ module Encode =
                         wrapper.Add(info.Name, result)
                         wrapper :> JsonValue
         )
+#endif
+
+#if THOTH_JSON_FABLE
+    and inline private handleUnion (extra : Map<string, ref<BoxedEncoder>>)
+                            (caseStrategy : CaseStrategy)
+                            (skipNullField : bool)
+                            (t : System.Type) : BoxedEncoder =
+        boxEncoder(fun (value : obj) ->
+            let unionCasesInfo = FSharpType.GetUnionCases(t, allowAccessToPrivateRepresentation = true)
+            let info, fields = FSharpValue.GetUnionFields(value, t, allowAccessToPrivateRepresentation = true)
+
+            match unionCasesInfo.Length with
+            | 1 ->
+                let fieldTypes = info.GetFields()
+                // There is only one field so we can use a direct access to it
+                let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
+                encoder.Encode(fields.[0])
+
+            | _ ->
+                match fields.Length with
+                | 0 ->
+                    string info.Name
+
+                | length ->
+                    let fieldTypes = info.GetFields()
+                    let res = Array.zeroCreate(length + 1)
+                    res.[0] <- string info.Name
+                    for i = 1 to length do
+                        let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[i-1].PropertyType
+                        res.[i] <- encoder.Encode(fields.[i-1])
+                    array res
+        )
+#endif
 
     and inline private handleRecordAndUnion (extra : Map<string, ref<BoxedEncoder>>)
                             (caseStrategy : CaseStrategy)
