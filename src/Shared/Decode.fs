@@ -1249,6 +1249,20 @@ module Decode =
                     FSharpValue.MakeUnion(unionCaseInfo, List.toArray values, allowAccessToPrivateRepresentation = true)
                 )
 
+    and inline private handleTuple (extra : Map<string, ref<BoxedDecoder>>)
+                                    (caseStrategy : CaseStrategy)
+                                    (t : System.Type) : BoxedDecoder =
+        let decoders =
+            FSharpType.GetTupleElements(t)
+            |> Array.map (autoDecoder extra caseStrategy false)
+        boxDecoder(fun value ->
+            if Helpers.isArray value then
+                mixedArray "tuple elements" decoders (Helpers.asArray value)
+                |> Result.map (fun xs -> FSharpValue.MakeTuple(List.toArray xs, t))
+            else
+                ("", BadPrimitive ("an array", value)) |> Error
+        )
+
     and inline private handleUnion (extra : Map<string, ref<BoxedDecoder>>)
                                     (caseStrategy : CaseStrategy)
                                     (t : System.Type) : BoxedDecoder =
@@ -1273,11 +1287,9 @@ module Decode =
                 match uciOption with
                     | Some uci ->
                         let content = valueObj.[uci.Name]
-                        if Helpers.isBoolean content
-                        then
+                        if Helpers.isBoolean content then
                             makeUnion extra caseStrategy uci.DeclaringType unionCasesInfo uci.Name [||]
-                        else if Helpers.isArray content
-                        then
+                        else if Helpers.isArray content then
                             let contentArray = Helpers.asArray content
                             makeUnion extra caseStrategy uci.DeclaringType unionCasesInfo uci.Name contentArray
                         else
@@ -1357,20 +1369,6 @@ Thoth.Json.Net only support the folluwing enum types:
 - uint32
 If you can't use one of these types, please pass an extra decoder.
                 """ t.FullName
-
-    and inline private handleTuple (extra : Map<string, ref<BoxedDecoder>>)
-                                    (caseStrategy : CaseStrategy)
-                                    (t : System.Type) : BoxedDecoder =
-        let decoders =
-            FSharpType.GetTupleElements(t)
-            |> Array.map (autoDecoder extra caseStrategy false)
-        boxDecoder(fun value ->
-            if Helpers.isArray value then
-                mixedArray "tuple elements" decoders (Helpers.asArray value)
-                |> Result.map (fun xs -> FSharpValue.MakeTuple(List.toArray xs, t))
-            else
-                ("", BadPrimitive ("an array", value)) |> Error
-        )
 
     and inline private handleGeneric (extra : Map<string, ref<BoxedDecoder>>)
                                         (caseStrategy : CaseStrategy)

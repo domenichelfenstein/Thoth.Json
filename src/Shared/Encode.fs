@@ -4,6 +4,9 @@ namespace Thoth.Json.Fable
 
 #if THOTH_JSON_NEWTONSOFT
 namespace Thoth.Json.Newtonsoft
+
+open Newtonsoft.Json.Linq
+
 #endif
 
 [<RequireQualifiedAccess>]
@@ -800,9 +803,17 @@ module Encode =
             else
                 match unionCasesInfo.Length with
                 | 1 ->
-                    // There is only one field so we can use a direct access to it
-                    let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
-                    encoder.Encode(fields.[0])
+                    match fields.Length with
+                    | 1 ->
+                        let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[0].PropertyType
+                        encoder.Encode(fields.[0])
+                    | length ->
+                        let result = JArray()
+                        for i in 0..(length-1) do
+                            let encoder = autoEncoder extra caseStrategy skipNullField fieldTypes.[i].PropertyType
+                            let v = encoder.Encode(fields.[i])
+                            result.Add(v)
+                        result :> JsonValue
 
                 | _ ->
                     match fields.Length with
