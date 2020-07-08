@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>netcoreapp3.1</TargetFramework>
+        <DefineConstants>THOTH_JSON_NEWTONSOFT</DefineConstants>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Types.fs" />
+        <Compile Include="Program.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Tests.Thoth.Json.Newtonsoft\Tests.Thoth.Json.Newtonsoft.fsproj" />
+    </ItemGroup>
+
+</Project>
